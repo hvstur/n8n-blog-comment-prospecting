@@ -1,0 +1,487 @@
+{
+  "name": "Blog Comment Prospecting",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "62176ccf-6a91-416f-bfb9-03e7705b31fe",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1728,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ {\n  \"niches\": [\"casino\", \"sport betting\", \"btst casino\"],\n  \"queries_per_niche\": [\n    \"\\\"powered by wordpress\\\" \\\"leave a comment\\\" blog\",\n    \"\\\"powered by wordpress\\\" \\\"post a comment\\\" blog\",\n    \"\\\"powered by ghost\\\" comments blog\",\n    \"\\\"powered by blogger\\\" comments blog\",\n    \"blog \\\"leave a reply\\\" comment\"\n  ]\n} }}",
+        "options": {}
+      },
+      "id": "e499fed7-4ed8-4e04-b908-dcb0907216fe",
+      "name": "Задать ниши и запросы",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        -1280,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst combos = [];\nfor (const niche of data.niches) {\n  for (const q of data.queries_per_niche) {\n    combos.push({ niche, query: `${q} ${niche}` });\n  }\n}\nreturn combos.map(c => ({ json: c }));"
+      },
+      "id": "ec28d0ee-becf-45e5-8d92-1f085a732694",
+      "name": "Сформировать список запросов",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1056,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://google.serper.dev/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-KEY",
+              "value": "={{ $('ApiKeys').first().json.serper_api_key }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"q\": $json.query } }}",
+        "options": {}
+      },
+      "id": "6c7700a0-3d41-4de8-b1f6-7dddfc582cf1",
+      "name": "Поиск через Serper",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -832,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Serper returns results in `organic` (Google CSE used `items`)\nconst queries = $('Сформировать список запросов').all();\nconst items = [];\n$input.all().forEach((item, i) => {\n  const results = item.json.organic || item.json.items || [];\n  const niche = queries[i] ? queries[i].json.niche : null;\n  for (const r of results) {\n    items.push({ json: { url: r.link, title: r.title, snippet: r.snippet, niche } });\n  }\n});\nconst seen = new Set();\nconst unique = [];\nfor (const it of items) {\n  try {\n    const domain = new URL(it.json.url).hostname;\n    if (!seen.has(domain)) {\n      seen.add(domain);\n      unique.push(it);\n    }\n  } catch (e) {}\n}\nreturn unique;"
+      },
+      "id": "3b7b4c7a-93a9-4801-9392-cceca583ff2f",
+      "name": "Извлечь уникальные домены",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -608,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "a0dcf4de-67f7-4c39-86e5-b4c3cd3209ed",
+      "name": "Loop Over Domains",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -384,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.url}}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 10000
+        }
+      },
+      "id": "2af7dac2-6928-45a6-b72c-4e7590d13c45",
+      "name": "Загрузить HTML страницы",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -160,
+        -32
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = ($input.item.json.data || '').toString();\nconst lowerHtml = html.toLowerCase();\nlet cms = 'unknown';\nif (html.includes('wp-content') || html.includes('/wp-json/') || html.includes('wp-includes')) cms = 'WordPress';\nelse if (lowerHtml.includes('ghost') && lowerHtml.includes('content=\"ghost')) cms = 'Ghost';\nelse if (lowerHtml.includes('blogger') || lowerHtml.includes('blogspot')) cms = 'Blogger';\nelse if (html.includes('Joomla!') || html.includes('/components/com_')) cms = 'Joomla';\nelse if (html.includes('sites/default/files') || html.includes('Drupal.settings')) cms = 'Drupal';\nelse if (lowerHtml.includes('bitrix')) cms = 'Bitrix';\nelse if (html.includes('/typo3conf/')) cms = 'TYPO3';\nelse if (lowerHtml.includes('modx')) cms = 'MODX';\nelse if (lowerHtml.includes('tilda')) cms = 'Tilda';\nconst forumSignatures = ['phpbb', 'vbulletin', 'discourse', 'invision power board', 'ipboard', 'simplemachines', 'smf', 'xenforo', 'vanilla forums', 'forum rules', 'thread starter', 'new topic', 'post reply', 'viewforum', 'viewtopic'];\nconst isForum = forumSignatures.some(sig => lowerHtml.includes(sig)) || /\\/forum(s)?\\//.test(lowerHtml) || /\\bforum\\b/.test(lowerHtml.match(/<title[^>]*>(.*?)<\\/title>/i)?.[1]?.toLowerCase() || '');\nconst isBlog = /\\/blog\\//.test(lowerHtml) || lowerHtml.includes('rel=\"category tag\"') || lowerHtml.includes('posted in') || lowerHtml.includes('published on') || lowerHtml.includes('article:published_time') || cms === 'WordPress' || cms === 'Ghost' || cms === 'Blogger';\nconst hasCommentForm = (/<form[^>]*id=[\"']?comment/i.test(html) || /<form[^>]*class=[\"'][^\"']*comment/i.test(html) || lowerHtml.includes('leave a reply') || lowerHtml.includes('leave a comment') || lowerHtml.includes('post a comment') || lowerHtml.includes('оставить комментарий') || lowerHtml.includes('добавить комментарий'));\nconst requiresRegistration = /(you must be logged in to post a comment|login to comment|войдите чтобы оставить комментарий)/i.test(html);\nconst site = $('Loop Over Domains').item.json;\nreturn { json: { url: site.url, title: site.title, niche: site.niche, cms, isForum, isBlog, hasCommentForm, requiresRegistration } };",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "09f57dc0-0126-4a79-b03f-d989f88453d1",
+      "name": "Определить CMS и тип площадки",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        64,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "57f51d11-d1c2-4cd3-8e32-65e30fadfc83",
+              "leftValue": "={{ $json.hasCommentForm }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        288,
+        -32
+      ],
+      "id": "799682ea-8cd2-48e8-8953-395b7960c72a",
+      "name": "Есть форма комментариев?"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_DONORS_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "доноры",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_DONORS_SHEET_ID/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Donors",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/YOUR_DONORS_SHEET_ID/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "url": "={{ $json.url }}",
+            "cms": "={{ $json.cms }}",
+            "has_comment_form": "={{ $json.hasCommentForm }}",
+            "requires_registration": "={{ $json.requiresRegistration }}",
+            "niche": "={{ $json.niche }}",
+            "status": "={{ $json.isBlog && $json.hasCommentForm && !$json.requiresRegistration ? 'ready_to_contact' : 'needs_review' }}",
+            "checked_at": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [
+            "url"
+          ],
+          "schema": [
+            {
+              "id": "url",
+              "displayName": "url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "cms",
+              "displayName": "cms",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "has_comment_form",
+              "displayName": "has_comment_form",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "requires_registration",
+              "displayName": "requires_registration",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "niche",
+              "displayName": "niche",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "checked_at",
+              "displayName": "checked_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "dfb3cf6c-f224-46c3-8c2a-f4278f912469",
+      "name": "Записать в Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        512,
+        -32
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "id": "56bb8563-d4e8-4c3d-b4f8-aca2e934894c",
+      "name": "Пауза (антибан)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        624,
+        176
+      ],
+      "webhookId": "YOUR_WEBHOOK_ID"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "bcdae22b-3d22-487a-b802-658ad1a8cf19",
+              "name": "serper_api_key",
+              "value": "YOUR_SERPER_API_KEY",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1504,
+        160
+      ],
+      "id": "b247b798-7a33-4b81-96eb-666a385e5dbf",
+      "name": "ApiKeys"
+    }
+  ],
+  "pinData": {
+    "Manual Trigger": [
+      {
+        "json": {},
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "ApiKeys",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Задать ниши и запросы": {
+      "main": [
+        [
+          {
+            "node": "Сформировать список запросов",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Сформировать список запросов": {
+      "main": [
+        [
+          {
+            "node": "Поиск через Serper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Извлечь уникальные домены": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Domains",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Domains": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Загрузить HTML страницы",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Загрузить HTML страницы": {
+      "main": [
+        [
+          {
+            "node": "Определить CMS и тип площадки",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Определить CMS и тип площадки": {
+      "main": [
+        [
+          {
+            "node": "Есть форма комментариев?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Записать в Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Пауза (антибан)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Пауза (антибан)": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Domains",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ApiKeys": {
+      "main": [
+        [
+          {
+            "node": "Задать ниши и запросы",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Поиск через Serper": {
+      "main": [
+        [
+          {
+            "node": "Извлечь уникальные домены",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Есть форма комментариев?": {
+      "main": [
+        [
+          {
+            "node": "Записать в Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Пауза (антибан)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "4c008819-658e-40e0-85d8-5be810ac2150",
+  "nodeGroups": [],
+  "id": "7OA2vaunqBbozdnQ",
+  "tags": []
+}
